@@ -1,0 +1,129 @@
+/*
+ * @Date: 2023-06-03 23:28:56
+ * @LastEditors: 974782852@qq.com
+ * @LastEditTime: 2023-06-04 15:23:56
+ * @FilePath: \io-monitor\src\view_batch.c
+ */
+/* SPDX-License-Identifier: GPL-2.0-or-later
+
+Copyright (C) 2014  Vyacheslav Trushkin
+Copyright (C) 2020-2023  Boian Bonev
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program; if not, write to the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+
+*/
+
+#include "iotop.h"
+
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+static inline void view_batch(struct xxxid_stats_arr *cs,struct xxxid_stats_arr *ps,struct act_stats *act) {
+	double time_s=timediff_in_s(act->ts_o,act->ts_c);
+	int diff_len=create_diff(cs,ps,time_s,act->ts_c,NULL,0,NULL);
+	double total_read,total_write;
+	char str_read[4],str_write[4];
+	calc_total(cs,&total_read,&total_write);
+	//unit: B/s
+	printf("test2 %f %f \r\n", total_read, total_write);
+
+	double org_read = total_read;
+	double org_write = total_write;
+
+	humanize_val(&total_read,str_read,1);
+	humanize_val(&total_write,str_write,1);
+
+	printf(HEADER1_FORMAT,total_read,str_read,"",total_write,str_write,"");
+
+	int i;
+	
+	printf("\n");
+
+	if(org_write <= (100.0*(1024.0*1024.0))){
+		printf("write is %f \r\n", org_write / (1024.0*1024.0));
+		return;
+	}
+
+	if (!config.f.quiet)
+		printf("%6s %4s %8s %11s %11s %6s %6s %s\n",config.f.processes?"PID":"TID","PRIO","USER","DISK READ","DISK WRITE","SWAPIN","IO","COMMAND");
+	arr_sort(cs,iotop_sort_cb);
+
+	for (i=0;cs->sor&&i<diff_len;i++) {
+		struct xxxid_stats *s=cs->sor[i];
+		char read_str[4],write_str[4];
+		double write_val;
+		double read_val;
+		char *pw_name;
+
+		if (config.f.accumbw) {
+			read_val=s->read_val_abw;
+			write_val=s->write_val_abw;
+		} else if (config.f.accumulated) {
+			read_val=s->read_val_acc;
+			write_val=s->write_val_acc;
+		} else {
+			read_val=s->read_val;
+			write_val=s->write_val;
+		}
+		// show only processes, if configured
+		if (config.f.processes&&s->pid!=s->tid)
+			continue;
+		if (config.f.only&&!read_val&&!write_val)
+			continue;
+		if (s->exited) // do not show exited processes in batch view
+			continue;
+
+		humanize_val(&read_val,read_str,1);
+		humanize_val(&write_val,write_str,1);
+
+		pw_name=u8strpadt(s->pw_name,10);
+
+		printf("%6i %4s %s %7.2f %-3.3s %7.2f %-3.3s %2.2f %% %2.2f %% %s\n",
+							s->tid,
+							str_ioprio(s->io_prio),
+							pw_name?pw_name:"(null)",
+							read_val,
+							read_str,
+							write_val,
+							write_str,
+							s->swapin_val,
+							s->blkio_val,
+							config.f.fullcmdline?s->cmdline2:s->cmdline1);
+
+		if (pw_name)
+			free(pw_name);
+	}
+}
+
+inline void view_batch_init(void) {
+	if (!read_task_delayacct())
+		printf("Warning: task_delayacct is 0, enable by: echo 1 > /proc/sys/kernel/task_delayacct\n");
+}
+
+inline void view_batch_fini(void) {
+}
+
+inline void view_batch_loop(void) {
+	struct xxxid_stats_arr *ps=NULL;
+	struct xxxid_stats_arr *cs=NULL;
+	struct act_stats act={0,0,0,0,0,0,0,};
+
+	for (;;) {
+		cs=fetch_data(filter1);
+		view_batch(cs,ps,&act);
+		if (ps)
+			arr_free(ps);
+		ps=cs;
+		params.delay = 1;
+		// printf(" %d \r\n", params.delay);
+		sleep(params.delay);
+	}
+	arr_free(cs);
+}
+
